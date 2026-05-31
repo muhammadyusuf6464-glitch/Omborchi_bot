@@ -69,11 +69,24 @@ def get_item_balance(item_id):
     conn.close()
     return row
 
-ADD_NAME, ADD_UNIT, IN_SELECT, IN_QTY, OUT_SELECT, OUT_QTY = range(6)
+# States
+(ADD_NAME, ADD_UNIT,
+ IN_SELECT, IN_QTY,
+ OUT_SELECT, OUT_QTY,
+ EDIT_SELECT, EDIT_CHOOSE, EDIT_VALUE,
+ DEL_SELECT) = range(10)
+
 MONTHS = ['','Yanvar','Fevral','Mart','Aprel','May','Iyun','Iyul','Avgust','Sentabr','Oktabr','Noyabr','Dekabr']
 
-def fmt(n): return f"{n:,.2f}".replace(',', ' ')
-def uname(u): return f"@{u.username}" if u.username else u.first_name
+def fmt(n):
+    return f"{n:,.2f}".replace(',', ' ')
+
+def uname(u):
+    return f"@{u.username}" if u.username else u.first_name
+
+BUTTONS = ["Kirim", "Chiqim", "Tovar qoshish", "Qoldiqlar",
+           "Tarix", "Kunlik hisobot", "Oylik hisobot", "Sozlamalar",
+           "Tovarni tahrirlash", "Tovarni ochirish"]
 
 def main_kb():
     kb = [
@@ -81,26 +94,35 @@ def main_kb():
         [KeyboardButton("Tovar qoshish"), KeyboardButton("Qoldiqlar")],
         [KeyboardButton("Tarix"), KeyboardButton("Kunlik hisobot")],
         [KeyboardButton("Oylik hisobot"), KeyboardButton("Sozlamalar")],
+        [KeyboardButton("Tovarni tahrirlash"), KeyboardButton("Tovarni ochirish")],
     ]
     return ReplyKeyboardMarkup(kb, resize_keyboard=True)
 
+# START
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "OMBOR BOSHQARUVI BOTIGA XUSH KELIBSIZ!\n\nPastdagi tugmalardan foydalaning.\n\nBot 24/7 ishlaydi!",
+        "OMBOR BOSHQARUVI BOTIGA XUSH KELIBSIZ!\n\n"
+        "Pastdagi tugmalardan foydalaning.\n\n"
+        "Bot 24/7 ishlaydi!",
         reply_markup=main_kb()
     )
 
+# TOVAR QOSHISH
 async def add_item_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Yangi tovar nomi kiriting:\n(masalan: Sement, Temir, Yog, Qum)")
+    await update.message.reply_text(
+        "Yangi tovar nomi kiriting:\n(masalan: Sement, Temir, Yog, Qum)"
+    )
     return ADD_NAME
 
 async def add_item_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
     txt = update.message.text.strip()
-    if txt in ["Kirim","Chiqim","Tovar qoshish","Qoldiqlar","Tarix","Kunlik hisobot","Oylik hisobot","Sozlamalar"]:
-        await handle_buttons(update, context)
+    if txt in BUTTONS:
+        await route_button(update, context)
         return ConversationHandler.END
     context.user_data['new_name'] = txt
-    await update.message.reply_text(f"Nom: {txt}\n\nOlchov birligini kiriting:\n(kg, litr, dona, metr, qop, tonna)")
+    await update.message.reply_text(
+        f"Nom: {txt}\n\nOlchov birligini kiriting:\n(kg, litr, dona, metr, qop, tonna)"
+    )
     return ADD_UNIT
 
 async def add_item_unit(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -110,27 +132,47 @@ async def add_item_unit(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         conn.execute("INSERT INTO items (name, unit) VALUES (?,?)", (name, unit))
         conn.commit()
-        await update.message.reply_text(f"OK! {name} ({unit}) omborga qoshildi!", reply_markup=main_kb())
+        await update.message.reply_text(
+            f"OK! {name} ({unit}) omborga qoshildi!",
+            reply_markup=main_kb()
+        )
     except sqlite3.IntegrityError:
-        await update.message.reply_text(f"{name} allaqachon mavjud!", reply_markup=main_kb())
+        await update.message.reply_text(
+            f"{name} allaqachon mavjud!",
+            reply_markup=main_kb()
+        )
     finally:
         conn.close()
     return ConversationHandler.END
 
+# KIRIM
 async def incoming_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     conn = get_db()
     items = conn.execute("SELECT id, name, unit FROM items ORDER BY name").fetchall()
     conn.close()
     if not items:
-        await update.message.reply_text("Hali tovar yoq. Tovar qoshish tugmasini bosing.")
+        await update.message.reply_text(
+            "Hali tovar yoq.\nTovar qoshish tugmasini bosing.",
+            reply_markup=main_kb()
+        )
         return ConversationHandler.END
-    kb = [[InlineKeyboardButton(f"{i['name']} ({i['unit']})", callback_data=f"in_{i['id']}")] for i in items]
+    kb = []
+    for i in items:
+        bal = get_item_balance(i['id'])
+        kb.append([InlineKeyboardButton(
+            f"{i['name']} | qoldiq: {fmt(bal['balance'])} {i['unit']}",
+            callback_data=f"in_{i['id']}"
+        )])
     kb.append([InlineKeyboardButton("Bekor qilish", callback_data="cancel")])
-    await update.message.reply_text("Qaysi tovar keldi?", reply_markup=InlineKeyboardMarkup(kb))
+    await update.message.reply_text(
+        "Qaysi tovarga kirim qilasiz?",
+        reply_markup=InlineKeyboardMarkup(kb)
+    )
     return IN_SELECT
 
 async def incoming_select(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query; await q.answer()
+    q = update.callback_query
+    await q.answer()
     if q.data == "cancel":
         await q.edit_message_text("Bekor qilindi.")
         return ConversationHandler.END
@@ -138,42 +180,77 @@ async def incoming_select(update: Update, context: ContextTypes.DEFAULT_TYPE):
     conn = get_db()
     item = conn.execute("SELECT * FROM items WHERE id=?", (item_id,)).fetchone()
     conn.close()
-    context.user_data.update({'item_id': item_id, 'item_name': item['name'], 'item_unit': item['unit']})
     bal = get_item_balance(item_id)
-    await q.edit_message_text(f"{item['name']}\nJoriy qoldiq: {fmt(bal['balance'])} {item['unit']}\n\nQancha keldi? ({item['unit']}):")
+    context.user_data.update({
+        'item_id': item_id,
+        'item_name': item['name'],
+        'item_unit': item['unit']
+    })
+    await q.edit_message_text(
+        f"Tovar: {item['name']}\n"
+        f"Joriy qoldiq: {fmt(bal['balance'])} {item['unit']}\n\n"
+        f"Qancha keldi? (faqat son kiriting, masalan: 50)"
+    )
     return IN_QTY
 
 async def incoming_qty(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    txt = update.message.text.strip()
+    if txt in BUTTONS:
+        await route_button(update, context)
+        return ConversationHandler.END
     try:
-        qty = float(update.message.text.replace(',', '.').replace(' ', ''))
-        assert qty > 0
-    except:
-        await update.message.reply_text("Togri son kiriting (masalan: 50 yoki 12.5).")
+        qty = float(txt.replace(',', '.').replace(' ', ''))
+        if qty <= 0:
+            raise ValueError
+    except ValueError:
+        await update.message.reply_text(
+            "Xato! Faqat musbat son kiriting.\nMasalan: 50 yoki 12.5"
+        )
         return IN_QTY
     d = context.user_data
     conn = get_db()
-    conn.execute("INSERT INTO transactions (item_id, type, quantity, user_id, username) VALUES (?,?,?,?,?)",
-                 (d['item_id'], 'IN', qty, update.effective_user.id, uname(update.effective_user)))
-    conn.commit(); conn.close()
+    conn.execute(
+        "INSERT INTO transactions (item_id, type, quantity, user_id, username) VALUES (?,?,?,?,?)",
+        (d['item_id'], 'IN', qty, update.effective_user.id, uname(update.effective_user))
+    )
+    conn.commit()
+    conn.close()
     bal = get_item_balance(d['item_id'])
     await update.message.reply_text(
-        f"KIRIM QILINDI!\n\nTovar: {d['item_name']}\nKeldi: +{fmt(qty)} {d['item_unit']}\nYangi qoldiq: {fmt(bal['balance'])} {d['item_unit']}\n\nKim: {uname(update.effective_user)}",
+        f"KIRIM QILINDI!\n\n"
+        f"Tovar: {d['item_name']}\n"
+        f"Qoshildi: +{fmt(qty)} {d['item_unit']}\n"
+        f"Yangi qoldiq: {fmt(bal['balance'])} {d['item_unit']}\n\n"
+        f"Kim: {uname(update.effective_user)}",
         reply_markup=main_kb()
     )
     return ConversationHandler.END
 
+# CHIQIM
 async def outgoing_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     balances = get_all_balances()
     if not balances:
-        await update.message.reply_text("Hali tovar yoq.")
+        await update.message.reply_text(
+            "Hali tovar yoq.",
+            reply_markup=main_kb()
+        )
         return ConversationHandler.END
-    kb = [[InlineKeyboardButton(f"{b['name']} (qoldiq: {fmt(b['balance'])} {b['unit']})", callback_data=f"out_{b['id']}")] for b in balances]
+    kb = []
+    for b in balances:
+        kb.append([InlineKeyboardButton(
+            f"{b['name']} | qoldiq: {fmt(b['balance'])} {b['unit']}",
+            callback_data=f"out_{b['id']}"
+        )])
     kb.append([InlineKeyboardButton("Bekor qilish", callback_data="cancel")])
-    await update.message.reply_text("Qaysi tovardan ishlatildi?", reply_markup=InlineKeyboardMarkup(kb))
+    await update.message.reply_text(
+        "Qaysi tovardan chiqim qilasiz?",
+        reply_markup=InlineKeyboardMarkup(kb)
+    )
     return OUT_SELECT
 
 async def outgoing_select(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query; await q.answer()
+    q = update.callback_query
+    await q.answer()
     if q.data == "cancel":
         await q.edit_message_text("Bekor qilindi.")
         return ConversationHandler.END
@@ -182,47 +259,183 @@ async def outgoing_select(update: Update, context: ContextTypes.DEFAULT_TYPE):
     item = conn.execute("SELECT * FROM items WHERE id=?", (item_id,)).fetchone()
     conn.close()
     bal = get_item_balance(item_id)
-    context.user_data.update({'item_id': item_id, 'item_name': item['name'], 'item_unit': item['unit'], 'balance': bal['balance']})
-    await q.edit_message_text(f"{item['name']}\nJoriy qoldiq: {fmt(bal['balance'])} {item['unit']}\n\nQancha ishlatildi? ({item['unit']}):")
+    context.user_data.update({
+        'item_id': item_id,
+        'item_name': item['name'],
+        'item_unit': item['unit'],
+        'balance': bal['balance']
+    })
+    await q.edit_message_text(
+        f"Tovar: {item['name']}\n"
+        f"Joriy qoldiq: {fmt(bal['balance'])} {item['unit']}\n\n"
+        f"Qancha ishlatildi? (faqat son kiriting)"
+    )
     return OUT_QTY
 
 async def outgoing_qty(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    txt = update.message.text.strip()
+    if txt in BUTTONS:
+        await route_button(update, context)
+        return ConversationHandler.END
     try:
-        qty = float(update.message.text.replace(',', '.').replace(' ', ''))
-        assert qty > 0
-    except:
-        await update.message.reply_text("Togri son kiriting.")
+        qty = float(txt.replace(',', '.').replace(' ', ''))
+        if qty <= 0:
+            raise ValueError
+    except ValueError:
+        await update.message.reply_text(
+            "Xato! Faqat musbat son kiriting.\nMasalan: 50 yoki 12.5"
+        )
         return OUT_QTY
     d = context.user_data
     if qty > d['balance']:
-        await update.message.reply_text(f"Yetarli qoldiq yoq!\nJoriy qoldiq: {fmt(d['balance'])} {d['item_unit']}\n\nQayta kiriting:")
+        await update.message.reply_text(
+            f"Yetarli qoldiq yoq!\n"
+            f"Joriy qoldiq: {fmt(d['balance'])} {d['item_unit']}\n\n"
+            f"Qayta kiriting:"
+        )
         return OUT_QTY
     conn = get_db()
-    conn.execute("INSERT INTO transactions (item_id, type, quantity, user_id, username) VALUES (?,?,?,?,?)",
-                 (d['item_id'], 'OUT', qty, update.effective_user.id, uname(update.effective_user)))
-    conn.commit(); conn.close()
+    conn.execute(
+        "INSERT INTO transactions (item_id, type, quantity, user_id, username) VALUES (?,?,?,?,?)",
+        (d['item_id'], 'OUT', qty, update.effective_user.id, uname(update.effective_user))
+    )
+    conn.commit()
+    conn.close()
     bal = get_item_balance(d['item_id'])
     warn = ""
-    if bal['balance'] <= 0: warn = "\n\nDIQQAT: Ombor bosh!"
-    elif bal['total_in'] > 0 and bal['balance'] < bal['total_in'] * 0.1: warn = "\n\nOgohlantirish: Qoldiq kam qoldi!"
+    if bal['balance'] <= 0:
+        warn = "\n\nDIQQAT: Ombor bosh!"
+    elif bal['total_in'] > 0 and bal['balance'] < bal['total_in'] * 0.1:
+        warn = "\n\nOgohlantirish: Qoldiq kam qoldi!"
     await update.message.reply_text(
-        f"CHIQIM QILINDI!\n\nTovar: {d['item_name']}\nIshlatildi: -{fmt(qty)} {d['item_unit']}\nQolgan qoldiq: {fmt(bal['balance'])} {d['item_unit']}\n\nKim: {uname(update.effective_user)}{warn}",
+        f"CHIQIM QILINDI!\n\n"
+        f"Tovar: {d['item_name']}\n"
+        f"Ishlatildi: -{fmt(qty)} {d['item_unit']}\n"
+        f"Qolgan: {fmt(bal['balance'])} {d['item_unit']}\n\n"
+        f"Kim: {uname(update.effective_user)}{warn}",
         reply_markup=main_kb()
     )
     return ConversationHandler.END
 
+# TOVARNI TAHRIRLASH
+async def edit_item_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    conn = get_db()
+    items = conn.execute("SELECT id, name, unit FROM items ORDER BY name").fetchall()
+    conn.close()
+    if not items:
+        await update.message.reply_text("Hali tovar yoq.", reply_markup=main_kb())
+        return ConversationHandler.END
+    kb = [[InlineKeyboardButton(f"{i['name']} ({i['unit']})", callback_data=f"edit_{i['id']}")] for i in items]
+    kb.append([InlineKeyboardButton("Bekor qilish", callback_data="cancel")])
+    await update.message.reply_text("Qaysi tovarni tahrirlaysiz?", reply_markup=InlineKeyboardMarkup(kb))
+    return EDIT_SELECT
+
+async def edit_item_select(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    if q.data == "cancel":
+        await q.edit_message_text("Bekor qilindi.")
+        return ConversationHandler.END
+    item_id = int(q.data.split('_')[1])
+    conn = get_db()
+    item = conn.execute("SELECT * FROM items WHERE id=?", (item_id,)).fetchone()
+    conn.close()
+    context.user_data.update({'edit_id': item_id, 'edit_name': item['name'], 'edit_unit': item['unit']})
+    kb = [
+        [InlineKeyboardButton("Nomini ozgartirish", callback_data="edit_name")],
+        [InlineKeyboardButton("Olchov birligini ozgartirish", callback_data="edit_unit")],
+        [InlineKeyboardButton("Bekor qilish", callback_data="cancel")],
+    ]
+    await q.edit_message_text(
+        f"Tovar: {item['name']} ({item['unit']})\n\nNimani ozgartirish kerak?",
+        reply_markup=InlineKeyboardMarkup(kb)
+    )
+    return EDIT_CHOOSE
+
+async def edit_item_choose(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    if q.data == "cancel":
+        await q.edit_message_text("Bekor qilindi.")
+        return ConversationHandler.END
+    context.user_data['edit_field'] = q.data
+    if q.data == "edit_name":
+        await q.edit_message_text(f"Yangi nom kiriting:\n(hozirgi: {context.user_data['edit_name']})")
+    else:
+        await q.edit_message_text(f"Yangi olchov birligini kiriting:\n(hozirgi: {context.user_data['edit_unit']})")
+    return EDIT_VALUE
+
+async def edit_item_value(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    txt = update.message.text.strip()
+    if txt in BUTTONS:
+        await route_button(update, context)
+        return ConversationHandler.END
+    d = context.user_data
+    conn = get_db()
+    try:
+        if d['edit_field'] == "edit_name":
+            conn.execute("UPDATE items SET name=? WHERE id=?", (txt, d['edit_id']))
+            msg = f"Tovar nomi ozgartirildi:\n{d['edit_name']} -> {txt}"
+        else:
+            conn.execute("UPDATE items SET unit=? WHERE id=?", (txt, d['edit_id']))
+            msg = f"Olchov birligi ozgartirildi:\n{d['edit_unit']} -> {txt}"
+        conn.commit()
+        await update.message.reply_text(msg, reply_markup=main_kb())
+    except sqlite3.IntegrityError:
+        await update.message.reply_text("Bu nom allaqachon mavjud!", reply_markup=main_kb())
+    finally:
+        conn.close()
+    return ConversationHandler.END
+
+# TOVARNI OCHIRISH
+async def del_item_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    conn = get_db()
+    items = conn.execute("SELECT id, name, unit FROM items ORDER BY name").fetchall()
+    conn.close()
+    if not items:
+        await update.message.reply_text("Hali tovar yoq.", reply_markup=main_kb())
+        return ConversationHandler.END
+    kb = [[InlineKeyboardButton(f"X {i['name']} ({i['unit']})", callback_data=f"del_{i['id']}")] for i in items]
+    kb.append([InlineKeyboardButton("Bekor qilish", callback_data="cancel")])
+    await update.message.reply_text("Qaysi tovarni ochirish kerak?", reply_markup=InlineKeyboardMarkup(kb))
+    return DEL_SELECT
+
+async def del_item_select(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    if q.data == "cancel":
+        await q.edit_message_text("Bekor qilindi.")
+        return ConversationHandler.END
+    item_id = int(q.data.split('_')[1])
+    conn = get_db()
+    item = conn.execute("SELECT * FROM items WHERE id=?", (item_id,)).fetchone()
+    conn.execute("DELETE FROM transactions WHERE item_id=?", (item_id,))
+    conn.execute("DELETE FROM items WHERE id=?", (item_id,))
+    conn.commit()
+    conn.close()
+    await q.edit_message_text(f"{item['name']} ombordan ochirildi!")
+    return ConversationHandler.END
+
+# QOLDIQLAR
 async def stock_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     balances = get_all_balances()
     if not balances:
-        await update.message.reply_text("Hali tovar yoq. Tovar qoshish tugmasini bosing.")
+        await update.message.reply_text("Hali tovar yoq. Tovar qoshish tugmasini bosing.", reply_markup=main_kb())
         return
     now = datetime.datetime.now().strftime("%d.%m.%Y %H:%M")
     text = f"OMBOR QOLDIQLARI\n{now}\n\n"
     for b in balances:
-        status = "BOSh" if b['balance'] <= 0 else ("KAM" if b['total_in'] > 0 and b['balance'] < b['total_in'] * 0.15 else "OK")
-        text += f"[{status}] {b['name']}: {fmt(b['balance'])} {b['unit']}\n"
+        if b['balance'] <= 0:
+            status = "[BOSH]"
+        elif b['total_in'] > 0 and b['balance'] < b['total_in'] * 0.15:
+            status = "[KAM]"
+        else:
+            status = "[OK]"
+        text += f"{status} {b['name']}: {fmt(b['balance'])} {b['unit']}\n"
+    text += "\n[OK]=Yaxshi  [KAM]=Kam qoldi  [BOSH]=Tugadi"
     await update.message.reply_text(text, reply_markup=main_kb())
 
+# TARIX
 async def history_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     conn = get_db()
     rows = conn.execute('''
@@ -232,7 +445,7 @@ async def history_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ''').fetchall()
     conn.close()
     if not rows:
-        await update.message.reply_text("Hali hech qanday harakat yoq.")
+        await update.message.reply_text("Hali hech qanday harakat yoq.", reply_markup=main_kb())
         return
     text = "SONGI 20 TA HARAKAT:\n\n"
     for r in rows:
@@ -242,8 +455,10 @@ async def history_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         text += f"{tip} {r['name']}: {sign}{fmt(r['quantity'])} {r['unit']}\n{r['username'] or '-'} | {dt_}\n\n"
     await update.message.reply_text(text, reply_markup=main_kb())
 
+# HISOBOTLAR
 def build_daily(date=None):
-    if date is None: date = datetime.date.today().isoformat()
+    if date is None:
+        date = datetime.date.today().isoformat()
     conn = get_db()
     rows = conn.execute('''
         SELECT t.type, t.quantity, t.username, i.name, i.unit
@@ -256,15 +471,18 @@ def build_daily(date=None):
     outs = [r for r in rows if r['type'] == 'OUT']
     if ins:
         text += "KIRIM:\n"
-        for r in ins: text += f"  + {r['name']}: {fmt(r['quantity'])} {r['unit']} ({r['username'] or '-'})\n"
+        for r in ins:
+            text += f"  + {r['name']}: {fmt(r['quantity'])} {r['unit']} ({r['username'] or '-'})\n"
     if outs:
         text += "\nCHIQIM:\n"
-        for r in outs: text += f"  - {r['name']}: {fmt(r['quantity'])} {r['unit']} ({r['username'] or '-'})\n"
-    if not ins and not outs: text += "Bugun harakat bolmadi.\n"
+        for r in outs:
+            text += f"  - {r['name']}: {fmt(r['quantity'])} {r['unit']} ({r['username'] or '-'})\n"
+    if not ins and not outs:
+        text += "Bugun harakat bolmadi.\n"
     text += "\nJORIY QOLDIQLAR:\n"
     for b in get_all_balances():
-        status = "BOSh" if b['balance'] <= 0 else "OK"
-        text += f"  [{status}] {b['name']}: {fmt(b['balance'])} {b['unit']}\n"
+        status = "[BOSH]" if b['balance'] <= 0 else "[OK]"
+        text += f"  {status} {b['name']}: {fmt(b['balance'])} {b['unit']}\n"
     return text
 
 def build_monthly(year=None, month=None):
@@ -279,7 +497,8 @@ def build_monthly(year=None, month=None):
         SELECT i.name, i.unit,
                COALESCE(SUM(CASE WHEN t.type='IN' THEN t.quantity ELSE 0 END),0) AS m_in,
                COALESCE(SUM(CASE WHEN t.type='OUT' THEN t.quantity ELSE 0 END),0) AS m_out
-        FROM items i LEFT JOIN transactions t ON i.id=t.item_id AND date(t.created_at) BETWEEN ? AND ?
+        FROM items i LEFT JOIN transactions t ON i.id=t.item_id
+            AND date(t.created_at) BETWEEN ? AND ?
         GROUP BY i.id ORDER BY i.name
     ''', (m_start, m_end)).fetchall()
     conn.close()
@@ -288,8 +507,12 @@ def build_monthly(year=None, month=None):
     for r in rows:
         if r['m_in'] > 0 or r['m_out'] > 0:
             any_data = True
-            text += f"{r['name']} ({r['unit']})\n  Kirim: {fmt(r['m_in'])}\n  Chiqim: {fmt(r['m_out'])}\n  Farq: {fmt(r['m_in']-r['m_out'])}\n\n"
-    if not any_data: text += "Bu oy harakat yoq.\n"
+            text += (f"{r['name']} ({r['unit']})\n"
+                     f"  Kirim:  {fmt(r['m_in'])}\n"
+                     f"  Chiqim: {fmt(r['m_out'])}\n"
+                     f"  Farq:   {fmt(r['m_in']-r['m_out'])}\n\n")
+    if not any_data:
+        text += "Bu oy harakat yoq.\n"
     text += "UMUMIY QOLDIQLAR:\n"
     for b in get_all_balances():
         text += f"  {b['name']}: {fmt(b['balance'])} {b['unit']}\n"
@@ -301,6 +524,7 @@ async def daily_report(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def monthly_report(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(build_monthly(), reply_markup=main_kb())
 
+# SOZLAMALAR
 async def setup_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     conn = get_db()
@@ -313,16 +537,22 @@ async def setup_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         time=datetime.time(hour=15, minute=0, tzinfo=datetime.timezone.utc),
         data=chat_id, name='auto_daily'
     )
-    await update.message.reply_text("Avtomatik hisobot sozlandi!\n\nHar kuni soat 20:00 da (Toshkent vaqti) hisobot yuboriladi.", reply_markup=main_kb())
+    await update.message.reply_text(
+        "Avtomatik hisobot sozlandi!\nHar kuni soat 20:00 da (Toshkent) hisobot yuboriladi.",
+        reply_markup=main_kb()
+    )
 
 async def auto_daily_job(context: ContextTypes.DEFAULT_TYPE):
-    await context.bot.send_message(chat_id=context.job.data, text="AVTOMATIK KUNLIK HISOBOT\n\n" + build_daily())
+    await context.bot.send_message(
+        chat_id=context.job.data,
+        text="AVTOMATIK KUNLIK HISOBOT\n\n" + build_daily()
+    )
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Bekor qilindi.", reply_markup=main_kb())
     return ConversationHandler.END
 
-async def handle_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def route_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     txt = update.message.text
     if txt == "Qoldiqlar": await stock_command(update, context)
     elif txt == "Tarix": await history_command(update, context)
@@ -339,26 +569,59 @@ def main():
     app = Application.builder().token(TOKEN).build()
 
     add_conv = ConversationHandler(
-        entry_points=[CommandHandler('add_item', add_item_start), MessageHandler(filters.Regex("^Tovar qoshish$"), add_item_start)],
+        entry_points=[
+            CommandHandler('add_item', add_item_start),
+            MessageHandler(filters.Regex("^Tovar qoshish$"), add_item_start)
+        ],
         states={
             ADD_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_item_name)],
             ADD_UNIT: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_item_unit)],
         },
         fallbacks=[CommandHandler('cancel', cancel)]
     )
+
     in_conv = ConversationHandler(
-        entry_points=[CommandHandler('incoming', incoming_start), MessageHandler(filters.Regex("^Kirim$"), incoming_start)],
+        entry_points=[
+            CommandHandler('incoming', incoming_start),
+            MessageHandler(filters.Regex("^Kirim$"), incoming_start)
+        ],
         states={
             IN_SELECT: [CallbackQueryHandler(incoming_select, pattern=r'^(in_\d+|cancel)$')],
             IN_QTY: [MessageHandler(filters.TEXT & ~filters.COMMAND, incoming_qty)],
         },
         fallbacks=[CommandHandler('cancel', cancel)]
     )
+
     out_conv = ConversationHandler(
-        entry_points=[CommandHandler('outgoing', outgoing_start), MessageHandler(filters.Regex("^Chiqim$"), outgoing_start)],
+        entry_points=[
+            CommandHandler('outgoing', outgoing_start),
+            MessageHandler(filters.Regex("^Chiqim$"), outgoing_start)
+        ],
         states={
             OUT_SELECT: [CallbackQueryHandler(outgoing_select, pattern=r'^(out_\d+|cancel)$')],
             OUT_QTY: [MessageHandler(filters.TEXT & ~filters.COMMAND, outgoing_qty)],
+        },
+        fallbacks=[CommandHandler('cancel', cancel)]
+    )
+
+    edit_conv = ConversationHandler(
+        entry_points=[
+            MessageHandler(filters.Regex("^Tovarni tahrirlash$"), edit_item_start)
+        ],
+        states={
+            EDIT_SELECT: [CallbackQueryHandler(edit_item_select, pattern=r'^(edit_\d+|cancel)$')],
+            EDIT_CHOOSE: [CallbackQueryHandler(edit_item_choose, pattern=r'^(edit_name|edit_unit|cancel)$')],
+            EDIT_VALUE: [MessageHandler(filters.TEXT & ~filters.COMMAND, edit_item_value)],
+        },
+        fallbacks=[CommandHandler('cancel', cancel)]
+    )
+
+    del_conv = ConversationHandler(
+        entry_points=[
+            MessageHandler(filters.Regex("^Tovarni ochirish$"), del_item_start)
+        ],
+        states={
+            DEL_SELECT: [CallbackQueryHandler(del_item_select, pattern=r'^(del_\d+|cancel)$')],
         },
         fallbacks=[CommandHandler('cancel', cancel)]
     )
@@ -368,7 +631,12 @@ def main():
     app.add_handler(add_conv)
     app.add_handler(in_conv)
     app.add_handler(out_conv)
-    app.add_handler(MessageHandler(filters.Regex("^(Qoldiqlar|Tarix|Kunlik hisobot|Oylik hisobot|Sozlamalar)$"), handle_buttons))
+    app.add_handler(edit_conv)
+    app.add_handler(del_conv)
+    app.add_handler(MessageHandler(
+        filters.Regex("^(Qoldiqlar|Tarix|Kunlik hisobot|Oylik hisobot|Sozlamalar)$"),
+        route_button
+    ))
 
     conn = get_db()
     row = conn.execute("SELECT value FROM settings WHERE key='report_chat_id'").fetchone()
