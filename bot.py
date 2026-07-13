@@ -16,6 +16,9 @@ logger = logging.getLogger(__name__)
 # DB_PATH muhit o'zgaruvchisini /data/warehouse.db qilib bering.
 # Shunda konteyner qayta yaratilganda ham malumotlar saqlanib qoladi.
 DB_PATH = os.environ.get('DB_PATH', 'warehouse.db')
+_db_dir = os.path.dirname(DB_PATH)
+if _db_dir:
+    os.makedirs(_db_dir, exist_ok=True)
 
 # ADMIN_IDS: kirim/chiqim va tovar boshqarish huquqiga ega Telegram user_id lar,
 # vergul bilan ajratilgan (masalan: "123456789,987654321").
@@ -755,3 +758,4 @@ def main():
 
 if __name__ == '__main__':
     main()
+
